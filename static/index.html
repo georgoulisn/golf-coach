@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Gemini Live Golf Coach</title>
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; -webkit-tap-highlight-color: transparent; }
+    body { background: #090d16; color: #f8fafc; overflow: hidden; height: 100vh; width: 100vw; display: flex; flex-direction: column; }
+    #camera-container { position: relative; flex: 1; display: flex; align-items: center; justify-content: center; background: #000; overflow: hidden; }
+    video { width: 100%; height: 100%; object-fit: cover; }
+    #frame-canvas { display: none; }
+    
+    /* Top Badges */
+    .hud-overlay { position: absolute; top: 16px; left: 16px; display: flex; gap: 10px; pointer-events: none; z-index: 10; }
+    .badge { background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(12px); border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 12px; padding: 10px 16px; font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.4); }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #ef4444; }
+    .status-dot.active { background: #10b981; box-shadow: 0 0 10px #10b981; }
+
+    /* PGA Tour Golfer Avatar Card */
+    #avatar-pip {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      width: 180px;
+      height: 235px;
+      background: linear-gradient(180deg, rgba(15, 23, 42, 0.95), rgba(9, 13, 22, 0.98));
+      backdrop-filter: blur(18px);
+      border: 2px solid #38bdf8;
+      border-radius: 20px;
+      box-shadow: 0 12px 32px rgba(0,0,0,0.8), 0 0 20px rgba(56, 189, 248, 0.25);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px;
+      z-index: 20;
+    }
+    #coach-canvas {
+      width: 168px;
+      height: 190px;
+      border-radius: 14px;
+      background: radial-gradient(circle at 50% 30%, #1e293b, #090d16);
+    }
+    .coach-tag {
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      color: #38bdf8;
+      letter-spacing: 1px;
+      padding-bottom: 2px;
+    }
+
+    /* Controls */
+    .controls { position: absolute; top: 76px; left: 16px; display: flex; gap: 10px; pointer-events: auto; z-index: 10; }
+    .btn { background: linear-gradient(135deg, #0284c7, #38bdf8); color: #090d16; border: none; padding: 12px 20px; font-size: 14px; font-weight: 700; border-radius: 12px; cursor: pointer; box-shadow: 0 4px 16px rgba(56, 189, 248, 0.35); transition: transform 0.1s; }
+    .btn:active { transform: scale(0.96); }
+    .btn:disabled { background: #334155; color: #64748b; cursor: not-allowed; box-shadow: none; }
+    .btn-secondary { background: rgba(30, 41, 59, 0.85); backdrop-filter: blur(8px); color: #f1f5f9; border: 1px solid rgba(255,255,255,0.15); box-shadow: none; }
+
+    /* Live Speech Transcript Box */
+    .coach-transcript { 
+      position: absolute; 
+      bottom: 135px; 
+      left: 16px; 
+      right: 16px; 
+      background: rgba(15, 23, 42, 0.92); 
+      backdrop-filter: blur(16px);
+      border-left: 4px solid #38bdf8; 
+      border-radius: 12px; 
+      padding: 14px 18px; 
+      font-size: 16px; 
+      line-height: 1.5; 
+      color: #f8fafc; 
+      min-height: 52px; 
+      z-index: 10; 
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    }
+
+    /* TrackMan-Style Telemetry HUD */
+    .metrics-panel { 
+      position: absolute; 
+      bottom: 20px; 
+      left: 16px; 
+      right: 16px; 
+      background: rgba(15, 23, 42, 0.92); 
+      backdrop-filter: blur(20px); 
+      border: 1px solid rgba(56, 189, 248, 0.25); 
+      border-radius: 18px; 
+      padding: 16px; 
+      display: grid; 
+      grid-template-columns: repeat(4, 1fr); 
+      gap: 14px; 
+      z-index: 10; 
+      box-shadow: 0 12px 36px rgba(0,0,0,0.6);
+    }
+    .metric-card { text-align: center; }
+    .metric-title { font-size: 11px; text-transform: uppercase; color: #94a3b8; margin-bottom: 4px; font-weight: 700; letter-spacing: 0.8px; }
+    .metric-val { font-size: 26px; font-weight: 800; color: #38bdf8; font-variant-numeric: tabular-nums; }
+  </style>
+</head>
+<body>
+
+  <div id="camera-container">
+    <video id="webcam" autoplay playsinline muted></video>
+    <canvas id="frame-canvas"></canvas>
+
+    <!-- Top Badges -->
+    <div class="hud-overlay">
+      <div class="badge">
+        <div id="live-dot" class="status-dot"></div>
+        <span id="live-status">Coach Standby</span>
+      </div>
+      <div class="badge">
+        <div id="rapsodo-dot" class="status-dot"></div>
+        <span id="rapsodo-status">MLM2PRO Ready</span>
+      </div>
+    </div>
+
+    <!-- Authentic PGA Tour Golfer Avatar Window -->
+    <div id="avatar-pip">
+      <canvas id="coach-canvas" width="340" height="380"></canvas>
+      <div class="coach-tag">PGA Pro Coach</div>
+    </div>
+
+    <!-- Controls -->
+    <div class="controls">
+      <button id="start-btn" class="btn" onclick="startCoachSession()">Start Coaching</button>
+      <button class="btn btn-secondary" onclick="flipCamera()">Flip Camera</button>
+      <button class="btn btn-secondary" onclick="simulateShot()">Simulate Shot</button>
+    </div>
+
+    <!-- Live Speech Transcript Box -->
+    <div id="transcript" class="coach-transcript">
+      Tap "Start Coaching" or tap "Simulate Shot" to test voice feedback.
+    </div>
+
+    <!-- Telemetry HUD -->
+    <div class="metrics-panel">
+      <div class="metric-card">
+        <div class="metric-title">Ball Speed</div>
+        <div id="m-ballspeed" class="metric-val">--</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-title">Attack Angle</div>
+        <div id="m-attackangle" class="metric-val">--</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-title">Carry Distance</div>
+        <div id="m-carry" class="metric-val">--</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-title">Spin Axis</div>
+        <div id="m-spinaxis" class="metric-val">--</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let ws = null;
+    let video = document.getElementById('webcam');
+    let canvas = document.getElementById('frame-canvas');
+    let ctx = canvas.getContext('2d');
+    let streamInterval = null;
+    let currentFacingMode = "user"; // Front camera
+    let currentAudio = null;
+
+    // --- AUTHENTIC PGA TOUR GOLFER CANVAS AVATAR ---
+    const cCanvas = document.getElementById('coach-canvas');
+    const cCtx = cCanvas.getContext('2d');
+    let isCoachSpeaking = false;
+    let mouthOpenAmount = 0.0;
+    let blinkTimer = 0;
+    let isBlinking = false;
+    let headBob = 0;
+
+    function renderTourGolfer() {
+      requestAnimationFrame(renderTourGolfer);
+      cCtx.clearRect(0, 0, cCanvas.width, cCanvas.height);
+
+      const time = Date.now() * 0.003;
+      headBob = Math.sin(time * 1.5) * 2.5;
+
+      // Natural Blinking
+      blinkTimer++;
+      if (blinkTimer > 160 && Math.random() < 0.03) {
+        isBlinking = true;
+        blinkTimer = 0;
+      }
+      if (blinkTimer > 8) isBlinking = false;
+
+      // Speaking mouth bounce
+      if (isCoachSpeaking) {
+        mouthOpenAmount = (Math.sin(time * 14) + 1.0) * 0.5;
+      } else {
+        mouthOpenAmount *= 0.8;
+      }
+
+      const cx = 170;
+      const cy = 185 + headBob;
+
+      cCtx.save();
+
+      // 1. Golf Background Silhouette (Range Flag & Green)
+      cCtx.fillStyle = "rgba(16, 185, 129, 0.15)";
+      cCtx.beginPath();
+      cCtx.arc(cx, 380, 220, Math.PI, 0);
+      cCtx.fill();
+
+      // 2. Golf Club Shaft angled over shoulder (PGA Tour Stance)
+      cCtx.strokeStyle = "#94a3b8"; // Steel shaft
+      cCtx.lineWidth = 6;
+      cCtx.beginPath();
+      cCtx.moveTo(cx - 110, cy + 160);
+      cCtx.lineTo(cx + 85, cy - 80);
+      cCtx.stroke();
+      
+      // Golf Club Head (Driver Head)
+      cCtx.fillStyle = "#0f172a";
+      cCtx.strokeStyle = "#38bdf8";
+      cCtx.lineWidth = 2;
+      cCtx.beginPath();
+      cCtx.ellipse(cx + 90, cy - 85, 24, 14, Math.PI / 4, 0, Math.PI * 2);
+      cCtx.fill();
+      cCtx.stroke();
+
+      // 3. Golfer Torso & Tour Performance Polo
+      cCtx.fillStyle = "#1e3a8a"; // Navy Tour Polo
+      cCtx.beginPath();
+      cCtx.ellipse(cx, cy + 145, 125, 75, 0, 0, Math.PI * 2);
+      cCtx.fill();
+
+      // Polo Collar with Contrast Trim
+      cCtx.fillStyle = "#1e40af";
+      cCtx.beginPath();
+      cCtx.moveTo(cx - 42, cy + 85);
+      cCtx.lineTo(cx, cy + 125);
+      cCtx.lineTo(cx + 42, cy + 85);
+      cCtx.lineTo(cx + 20, cy + 78);
+      cCtx.lineTo(cx, cy + 98);
+      cCtx.lineTo(cx - 20, cy + 78);
+      cCtx.closePath();
+      cCtx.fill();
+
+      // White Contrast Trim on Collar
+      cCtx.strokeStyle = "#f8fafc";
+      cCtx.lineWidth = 2;
+      cCtx.stroke();
+
+      // Two Buttons on Placket
+      cCtx.fillStyle = "#ffffff";
+      cCtx.beginPath();
+      cCtx.arc(cx, cy + 105, 3, 0, Math.PI * 2);
+      cCtx.arc(cx, cy + 118, 3, 0, Math.PI * 2);
+      cCtx.fill();
+
+      // Embroidered PGA Tour Shield on Left Chest
+      cCtx.fillStyle = "#38bdf8";
+      cCtx.beginPath();
+      cCtx.arc(cx + 55, cy + 120, 10, 0, Math.PI * 2);
+      cCtx.fill();
+      cCtx.fillStyle = "#ffffff";
+      cCtx.font = "bold 9px sans-serif";
+      cCtx.fillText("PGA", cx + 46, cy + 123);
+
+      // Neck
+      cCtx.fillStyle = "#e5b287";
+      cCtx.fillRect(cx - 26, cy + 50, 52, 40);
+
+      // 4. Athletic Head & Jawline
+      cCtx.fillStyle = "#f3c299";
+      cCtx.beginPath();
+      cCtx.ellipse(cx, cy, 68, 78, 0, 0, Math.PI * 2);
+      cCtx.fill();
+
+      // Athletic 5 o'clock shadow stubble
+      cCtx.fillStyle = "rgba(71, 85, 105, 0.18)";
+      cCtx.beginPath();
+      cCtx.arc(cx, cy + 30, 48, 0, Math.PI);
+      cCtx.fill();
+
+      // Ears
+      cCtx.fillStyle = "#e5b287";
+      cCtx.beginPath();
+      cCtx.arc(cx - 68, cy, 14, 0, Math.PI * 2);
+      cCtx.arc(cx + 68, cy, 14, 0, Math.PI * 2);
+      cCtx.fill();
+
+      // 5. Expressive Eyes & Eyebrows
+      const browLift = isCoachSpeaking ? -5 : 0;
+      cCtx.lineWidth = 4.5;
+      cCtx.strokeStyle = "#334155";
+      // Confident athletic brows
+      cCtx.beginPath();
+      cCtx.moveTo(cx - 46, cy - 22 + browLift);
+      cCtx.lineTo(cx - 12, cy - 28 + browLift);
+      cCtx.moveTo(cx + 46, cy - 22 + browLift);
+      cCtx.lineTo(cx + 12, cy - 28 + browLift);
+      cCtx.stroke();
+
+      if (isBlinking) {
+        cCtx.strokeStyle = "#1e293b";
+        cCtx.lineWidth = 3.5;
+        cCtx.beginPath();
+        cCtx.moveTo(cx - 42, cy - 8);
+        cCtx.lineTo(cx - 16, cy - 8);
+        cCtx.moveTo(cx + 16, cy - 8);
+        cCtx.lineTo(cx + 42, cy - 8);
+        cCtx.stroke();
+      } else {
+        // White of Eyes
+        cCtx.fillStyle = "#ffffff";
+        cCtx.beginPath();
+        cCtx.ellipse(cx - 28, cy - 8, 15, 11, 0, 0, Math.PI * 2);
+        cCtx.ellipse(cx + 28, cy - 8, 15, 11, 0, 0, Math.PI * 2);
+        cCtx.fill();
+
+        // Focused Pupils looking directly at golfer
+        cCtx.fillStyle = "#0f172a";
+        cCtx.beginPath();
+        cCtx.arc(cx - 26, cy - 8, 7.5, 0, Math.PI * 2);
+        cCtx.arc(cx + 30, cy - 8, 7.5, 0, Math.PI * 2);
+        cCtx.fill();
+
+        // Eye Catchlights
+        cCtx.fillStyle = "#ffffff";
+        cCtx.beginPath();
+        cCtx.arc(cx - 28, cy - 10, 2.5, 0, Math.PI * 2);
+        cCtx.arc(cx + 28, cy - 10, 2.5, 0, Math.PI * 2);
+        cCtx.fill();
+      }
+
+      // Strong Nose
+      cCtx.strokeStyle = "#c28b5e";
+      cCtx.lineWidth = 3;
+      cCtx.beginPath();
+      cCtx.moveTo(cx, cy - 6);
+      cCtx.lineTo(cx + 6, cy + 14);
+      cCtx.lineTo(cx - 4, cy + 16);
+      cCtx.stroke();
+
+      // 6. Speaking Mouth (Synchronized to Voice!)
+      const mouthH = Math.max(3, mouthOpenAmount * 22);
+      cCtx.fillStyle = "#9f1239";
+      cCtx.strokeStyle = "#881337";
+      cCtx.lineWidth = 2;
+      cCtx.beginPath();
+      cCtx.ellipse(cx, cy + 40, 22, mouthH, 0, 0, Math.PI * 2);
+      cCtx.fill();
+      cCtx.stroke();
+
+      // Teeth when mouth opens
+      if (mouthH > 7) {
+        cCtx.fillStyle = "#ffffff";
+        cCtx.fillRect(cx - 12, cy + 36, 24, 4);
+      }
+
+      // 7. Structured Tour Golf Cap (Titleist / Ping Style)
+      cCtx.fillStyle = "#0284c7"; // Cap Crown
+      cCtx.beginPath();
+      cCtx.arc(cx, cy - 42, 69, Math.PI * 0.96, Math.PI * 2.04);
+      cCtx.fill();
+
+      // Cap Seams & Eyelets
+      cCtx.strokeStyle = "#0369a1";
+      cCtx.lineWidth = 2;
+      cCtx.beginPath();
+      cCtx.moveTo(cx, cy - 110);
+      cCtx.lineTo(cx, cy - 40);
+      cCtx.stroke();
+
+      // Tour Visor Curved Brim
+      cCtx.fillStyle = "#0369a1";
+      cCtx.beginPath();
+      cCtx.ellipse(cx, cy - 36, 82, 16, 0.04, 0, Math.PI * 2);
+      cCtx.fill();
+      cCtx.strokeStyle = "#38bdf8";
+      cCtx.lineWidth = 2;
+      cCtx.stroke();
+
+      // Classic Golf Sunglasses pushed up on cap brim
+      cCtx.fillStyle = "#090d16";
+      cCtx.beginPath();
+      cCtx.roundRect ? cCtx.roundRect(cx - 48, cy - 58, 42, 16, 6) : cCtx.rect(cx - 48, cy - 58, 42, 16);
+      cCtx.roundRect ? cCtx.roundRect(cx + 6, cy - 58, 42, 16, 6) : cCtx.rect(cx + 6, cy - 58, 42, 16);
+      cCtx.fill();
+      cCtx.strokeStyle = "#38bdf8";
+      cCtx.lineWidth = 1.5;
+      cCtx.stroke();
+
+      cCtx.restore();
+    }
+
+    renderTourGolfer();
+
+    // --- REAL HUMAN VOICE ENGINE (Plays Native Studio Audio) ---
+    function playHumanVoiceAudio(text) {
+      isCoachSpeaking = true;
+
+      // 1. First Priority: Stream Real Server-Generated Neural Audio File
+      const audioUrl = `/api/tts?text=${encodeURIComponent(text)}`;
+      const audio = new Audio(audioUrl);
+      currentAudio = audio;
+
+      audio.onplay = () => { isCoachSpeaking = true; };
+      audio.onended = () => { isCoachSpeaking = false; };
+      audio.onerror = () => {
+        // Fallback to high-def device speech if server audio endpoint is unreachable
+        playDeviceVoiceFallback(text);
+      };
+
+      audio.play().catch(e => {
+        console.warn("Audio file play prevented, using device voice:", e);
+        playDeviceVoiceFallback(text);
+      });
+    }
+
+    function playDeviceVoiceFallback(text) {
+      if (!window.speechSynthesis) { isCoachSpeaking = false; return; }
+      window.speechSynthesis.cancel();
+
+      const clean = text.replace(/\[.*?\]:\s*/, '');
+      const utter = new SpeechSynthesisUtterance(clean);
+      utter.rate = 0.96;
+      utter.pitch = 1.0;
+
+      const voices = window.speechSynthesis.getVoices();
+      const natural = voices.find(v => v.lang.startsWith('en') && (
+        v.name.includes('Siri') || v.name.includes('Enhanced') || v.name.includes('Daniel') || v.name.includes('Samantha') || v.name.includes('Oliver')
+      ));
+      if (natural) utter.voice = natural;
+
+      utter.onstart = () => { isCoachSpeaking = true; };
+      utter.onend = () => { isCoachSpeaking = false; };
+      utter.onerror = () => { isCoachSpeaking = false; };
+
+      window.speechSynthesis.speak(utter);
+    }
+
+    // --- CAMERA ENGINE ---
+    async function startCamera(facing) {
+      if (video.srcObject) {
+        video.srcObject.getTracks().forEach(t => t.stop());
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: facing, width: { ideal: 640 }, height: { ideal: 480 } },
+        audio: true
+      });
+      video.srcObject = stream;
+      currentFacingMode = facing;
+    }
+
+    async function flipCamera() {
+      const next = currentFacingMode === "user" ? "environment" : "user";
+      try {
+        await startCamera(next);
+      } catch (e) {
+        alert("Camera flip: " + e.message);
+      }
+    }
+
+    async function startCoachSession() {
+      document.getElementById('start-btn').disabled = true;
+
+      try {
+        await startCamera(currentFacingMode);
+        document.getElementById('live-dot').classList.add('active');
+        document.getElementById('live-status').innerText = "AI Coach Live";
+        document.getElementById('transcript').innerText = "Pro AI Coach is watching! Address the ball and swing, or tap Simulate Shot.";
+        connectWebSocket();
+      } catch (err) {
+        alert("Camera error: " + err.message);
+        document.getElementById('start-btn').disabled = false;
+      }
+    }
+
+    function connectWebSocket() {
+      try {
+        const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = new WebSocket(`${proto}//${window.location.host}/ws`);
+        ws.onopen = () => {
+          streamInterval = setInterval(sendVideoFrame, 800);
+        };
+        ws.onmessage = (event) => {
+          const data = JSON.parse(event.data);
+          if (data.type === 'shot_update') {
+            updateHUD(data);
+          } else if (data.type === 'coach_speech') {
+            document.getElementById('transcript').innerText = data.text;
+            playHumanVoiceAudio(data.text);
+          }
+        };
+      } catch (e) {}
+    }
+
+    function sendVideoFrame() {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      canvas.width = 320;
+      canvas.height = 240;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const b64 = canvas.toDataURL('image/jpeg', 0.6).split(',')[1];
+      ws.send(JSON.stringify({ type: 'video_frame', frame: b64 }));
+    }
+
+    function updateHUD(data) {
+      document.getElementById('m-ballspeed').innerText = data.ball_speed + " mph";
+      document.getElementById('m-attackangle').innerText = data.attack_angle + "°";
+      document.getElementById('m-carry').innerText = data.carry + " yds";
+      document.getElementById('m-spinaxis').innerText = data.spin_axis + "°";
+      document.getElementById('rapsodo-dot').classList.add('active');
+    }
+
+    // --- INSTANT SIMULATE SHOT ---
+    function simulateShot() {
+      const mockShot = {
+        ball_speed: 98.4,
+        attack_angle: -3.2,
+        carry: 136.5,
+        spin_axis: 4.2
+      };
+      
+      updateHUD(mockShot);
+
+      const feedback = "Flushed 7-iron! Great compression with a minus 3.2 degree downward attack angle carrying 136 yards. Lead hip cleared well through impact.";
+      document.getElementById('transcript').innerText = "[PGA Coach]: " + feedback;
+
+      // Play real human studio audio file
+      playHumanVoiceAudio(feedback);
+
+      try {
+        fetch('/api/rapsodo_webhook', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            club: "7i",
+            ball_speed: 98.4,
+            club_speed: 71.8,
+            smash: 1.37,
+            attack_angle: -3.2,
+            launch_angle: 15.6,
+            spin_rate: 3450,
+            spin_axis: 4.2,
+            carry: 136.5
+          })
+        });
+      } catch (e) {}
+    }
+  </script>
+</body>
+</html>
